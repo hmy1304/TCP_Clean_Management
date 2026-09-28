@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 
 public interface SensorDataRawRepository extends JpaRepository<SensorDataRaw, Long> {
     @Query("SELECT d FROM SensorDataRaw d WHERE d.sensor.id = :sensorId AND d.measuredAt >= :since ORDER BY d.measuredAt ASC")
@@ -22,4 +23,6 @@ public interface SensorDataRawRepository extends JpaRepository<SensorDataRaw, Lo
     @Modifying
     @Query("DELETE FROM SensorDataRaw d WHERE d.measuredAt < :cutoffTime")
     void deleteOlderThan(@Param("cutoffTime") LocalDateTime cutoffTime);
+
+    Optional<SensorDataRaw> findFirstBySensorZoneIdOrderByMeasuredAtDesc(Long zoneId);
 }
