@@ -54,7 +54,7 @@ public class AnalyticsService {
 
         if (currentValue != null && currentValue > (threshold * 1.5)) { // 1.5x threshold pattern for smoking
             log.info("Smoking anomaly detected in Zone: {}", zone.getName());
-            createAlert(zone, AlertType.SMOKING, "À¯ÇØ°¡½º ³óµµ ±Ş»ó½Â °¨Áö (Èí¿¬/¿ª·ù ÀÇ½É). ¼öÄ¡: " + currentValue);
+            createAlert(zone, AlertType.SMOKING, "ìœ í•´ê°€ìŠ¤ ë†ë„ ê¸‰ìƒìŠ¹ ê°ì§€ (í¡ì—°/ì—­ë¥˜ ì˜ì‹¬). ìˆ˜ì¹˜: " + currentValue);
         }
     }
 
@@ -63,7 +63,7 @@ public class AnalyticsService {
 
         if (currentTemp != null && currentTemp < 0.0) { // Freeze risk if below 0 degrees
             log.info("Freeze risk detected in Zone: {}", zone.getName());
-            createAlert(zone, AlertType.FREEZE, "¿Âµµ ¿µÇÏ ÇÏ¶ô (µ¿ÆÄ À§Çè). ÇöÀç ¿Âµµ: " + currentTemp + "¡ÆC");
+            createAlert(zone, AlertType.FREEZE, "ì˜¨ë„ ì˜í•˜ í•˜ë½ (ë™íŒŒ ìœ„í—˜). í˜„ì¬ ì˜¨ë„: " + currentTemp + "Â°C");
         }
     }
 
