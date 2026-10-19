@@ -10,6 +10,8 @@
 #include <Ticker.h>
 #include <esp_phy_init.h>
 #include <esp_system.h>
+#include "soc/soc.h"
+#include "soc/rtc_cntl_reg.h"
 
 // =============================================================================
 // [1. 핀 번호 및 주요 동작 설정]
@@ -96,7 +98,8 @@ String getServerUrl() {
   }
   if (clean.length() == 0) return "";
   if (!clean.startsWith("http://") && !clean.startsWith("https://")) {
-    const bool useHttps = port == "443" || clean.indexOf(".ngrok") != -1 ||
+    const bool useHttps = port == "443" || port == "8443" || clean.indexOf(":8443") != -1 ||
+                          clean.indexOf(".ngrok") != -1 ||
                           clean.indexOf(".trycloudflare.com") != -1;
     clean = String(useHttps ? "https://" : "http://") + clean;
   }
@@ -503,6 +506,7 @@ void setupConfigPortal(bool forcePortal) {
       }
     }
 
+    preferences.putBool("portal_v2", true);
     Serial.printf("[SETUP] 설정 저장: 모드=%s, 서버=%s:%s, 수파베이스=%s, GPS=(%s,%s)\n",
                   destMode.c_str(), serverIp.c_str(), serverPort.c_str(), supabaseUrl.c_str(),
                   gpsLat.c_str(), gpsLng.c_str());
@@ -539,8 +543,19 @@ void setupConfigPortal(bool forcePortal) {
   digitalWrite(LED_PIN, HIGH); // 정상 연결 시 LED 점등 유지
 }
 
-// BOOT 버튼 폴링 감지 (3초 길게 누름 또는 3회 연속 클릭 시 즉시 포털 진입)
+// BOOT 버튼 폴링 감지 (3초 길게 누름, 3회 연속 클릭, 또는 시리얼 모니터 'setup' 입력 시 즉시 포털 진입)
 void checkBootButton() {
+  if (Serial.available() > 0) {
+    String cmd = Serial.readStringUntil('\n');
+    cmd.trim();
+    cmd.toLowerCase();
+    if (cmd == "setup" || cmd == "portal" || cmd == "ap") {
+      Serial.println("\n[SERIAL] 시리얼 명령 감지! 설정 포털(ESP32_Setup)을 엽니다.");
+      setupConfigPortal(true);
+      return;
+    }
+  }
+
   int currentState = digitalRead(FORCE_SETUP_PIN);
 
   if (currentState == LOW) {
@@ -587,6 +602,9 @@ void checkBootButton() {
 // [6. Arduino setup & loop]
 // =============================================================================
 void setup() {
+  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+  setCpuFrequencyMhz(80);
+
   Serial.begin(115200);
   delay(500);
 
@@ -600,8 +618,8 @@ void setup() {
     analogSetPinAttenuation(MQ7_ADC_PIN, ADC_11db);
   }
 
-  Serial.printf("[RECOVERY] Boot reason=%d, heap=%u, flash=%u Hz\n",
-                (int)esp_reset_reason(), ESP.getFreeHeap(), ESP.getFlashChipSpeed());
+  Serial.printf("[RECOVERY] Boot reason=%d, cpu=%u MHz, heap=%u, flash=%u Hz\n",
+                (int)esp_reset_reason(), getCpuFrequencyMhz(), ESP.getFreeHeap(), ESP.getFlashChipSpeed());
   Preferences recovery;
   if (recovery.begin("board-recovery", false)) {
     if (!recovery.getBool("phy-reset", false)) {
@@ -611,11 +629,14 @@ void setup() {
     }
     recovery.end();
   }
-  Serial.println("[RECOVERY] Starting Wi-Fi; brownout protection enabled");
+  Serial.println("[RECOVERY] Starting Wi-Fi (low-power 8.5dBm + 80MHz CPU)");
   Serial.flush();
+  WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
+    WiFi.setTxPower(WIFI_POWER_8_5dBm);
+  });
   WiFi.mode(WIFI_STA);
-  Serial.println("[RECOVERY] Wi-Fi initialized");
   WiFi.setTxPower(WIFI_POWER_8_5dBm); // 전력 소모 및 전압 강하 방지 (피크 350mA -> 120mA 절감)
+  Serial.println("[RECOVERY] Wi-Fi initialized");
 
   dht.begin();
 
@@ -644,8 +665,8 @@ void setup() {
   Serial.printf("[CONFIG] 저장된 GPS 위치: lat='%s', lng='%s' (전송완료여부: %s)\n",
                 gpsLat.c_str(), gpsLng.c_str(), gpsSent ? "YES" : "NO(1회 전송 대기)");
 
-  // 모드별 필수 설정 누락 시 또는 BOOT 버튼 누른 채 부팅 시 즉시 설정 포털 실행
-  bool needsConfig = (digitalRead(FORCE_SETUP_PIN) == LOW);
+  // 모드별 필수 설정 누락 시, 최초 1회 포털 재설정 시, 또는 BOOT 버튼 누른 채 부팅 시 즉시 설정 포털 실행
+  bool needsConfig = (digitalRead(FORCE_SETUP_PIN) == LOW) || !preferences.getBool("portal_v2", false);
   if (destMode == "SUPABASE") {
     if (supabaseUrl.length() == 0 || supabaseKey.length() == 0) needsConfig = true;
   } else {
@@ -658,7 +679,7 @@ void setup() {
   deviceMac = WiFi.macAddress();
   Serial.printf("[INIT] Wi-Fi 연결 완료! IP: %s, MAC: %s\n",
                 WiFi.localIP().toString().c_str(), deviceMac.c_str());
-  Serial.printf("[INIT] 최종 활성 전송 모드: %s\n", destMode.c_str());
+  Serial.printf("[INIT] 최종 활성 전송 모드: %s (설정 변경 시 시리얼창에 'setup' 입력)\n", destMode.c_str());
 }
 
 void loop() {
@@ -693,7 +714,8 @@ void loop() {
   const String sampleKey = deviceMac + ":" + String(bootNonce, HEX) +
                            ":" + String(sampleSequence++);
 
-  // 1) 온습도 센서 측정 (DHT 공식 라이브러리)
+  // 1) 온습도 센서 측정 (DHT11 마이크로초 펄스 타이밍을 위해 측정 25ms 동안만 240MHz 전환 후 80MHz 복귀)
+  setCpuFrequencyMhz(240);
   float humidity = dht.readHumidity();
   float temperature = dht.readTemperature();
   bool dhtOk = !isnan(temperature) && !isnan(humidity);
@@ -714,6 +736,7 @@ void loop() {
       dht = altDht;
     }
   }
+  setCpuFrequencyMhz(80);
 
   if (dhtOk) {
     Serial.printf("[SENSOR] DHT%d: %.1f °C, %.1f %%RH\n", configuredDhtType, temperature, humidity);
@@ -721,16 +744,37 @@ void loop() {
     Serial.printf("[SENSOR] DHT%d 읽기 실패 (센서 결선 또는 응답 없음)\n", configuredDhtType);
   }
 
-  // 2) 가스 센서 측정
+  // 2) 가스 센서 측정 (ESP32 ADC 저전압 불감대 보정 및 16회 다중 샘플링)
+  auto readGasAdc = [](uint8_t pin) -> int {
+    long rawSum = 0;
+    int rawMax = 0;
+    long mvSum = 0;
+    const int samples = 16;
+    for (int i = 0; i < samples; ++i) {
+      int r = analogRead(pin);
+      uint32_t mv = analogReadMilliVolts(pin);
+      rawSum += r;
+      if (r > rawMax) rawMax = r;
+      mvSum += mv;
+      delayMicroseconds(500);
+    }
+    int avgRaw = rawSum / samples;
+    int avgMv = mvSum / samples;
+    if (avgRaw > 0) return avgRaw;
+    if (rawMax > 0) return rawMax;
+    // ESP32 ADC raw가 저전압 불감대(~140mV 이하)로 0일 때 eFuse 보정 전압(mV)을 12비트 값으로 환산
+    return (avgMv * 4095) / 3300;
+  };
+
   int mq135Raw = 0;
   if (READ_MQ135) {
-    mq135Raw = analogRead(MQ135_ADC_PIN);
-    Serial.printf("[SENSOR] MQ-135 ADC raw: %d\n", mq135Raw);
+    mq135Raw = readGasAdc(MQ135_ADC_PIN);
+    Serial.printf("[SENSOR] MQ-135 ADC raw: %d (%u mV)\n", mq135Raw, analogReadMilliVolts(MQ135_ADC_PIN));
   }
   int mq7Raw = 0;
   if (READ_MQ7) {
-    mq7Raw = analogRead(MQ7_ADC_PIN);
-    Serial.printf("[SENSOR] MQ-7 ADC raw: %d\n", mq7Raw);
+    mq7Raw = readGasAdc(MQ7_ADC_PIN);
+    Serial.printf("[SENSOR] MQ-7 ADC raw: %d (%u mV)\n", mq7Raw, analogReadMilliVolts(MQ7_ADC_PIN));
   }
 
   // 3) 모드에 따른 분기 전송

@@ -1,0 +1,4 @@
+Flash Frequency: 40MHz (필수 — 80MHz로 하면 이 보드에서 Guru Meditation Error 크래시가 발생합니다)
+Flash Mode: DIO
+CPU Frequency: 80MHz (WiFi/BT) (또는 240MHz 그대로 두셔도 됩니다)
+현재 esp32_dht22_mq7.ino 코드 안에 평소(Wi-Fi 통신)에는 80MHz로 동작하고, DHT11 온습도를 읽는 0.02초 동안만 자동으로 240MHz로 전환하는 코드가 이미 들어가 있어서 툴 설정을 40MHz / 80MHz 그대로 두시고 업로드하셔도 정상 작동합니다.
