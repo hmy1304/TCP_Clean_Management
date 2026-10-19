@@ -1,6 +1,6 @@
 import { parseUtcDate, getAuthHeaders } from './backendApi';
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
 
 async function getJson(path, signal) {
   const response = await fetch(`${API_BASE}${path}`, {
